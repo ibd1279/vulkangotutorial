@@ -32,6 +32,8 @@ type TriangleApplication struct {
 	device                       vk.Device
 	graphicsQueue                vk.Queue
 	presentationQueue            vk.Queue
+
+	pipeline *Pipeline
 }
 
 func (app *TriangleApplication) setup() {
@@ -273,9 +275,23 @@ func (app *TriangleApplication) mainLoop() {
 
 func (app *TriangleApplication) drawFrame() {}
 
-func (app *TriangleApplication) recreatePipeline() {}
+func (app *TriangleApplication) recreatePipeline() {
+	// Create the new pipeline.
+	pipeline := NewPipeline(app, app.pipeline)
+
+	// Destroy the old pipeline.
+	if app.pipeline != nil {
+		app.pipeline.Cleanup(app.device)
+	}
+
+	// Update the application.
+	app.pipeline = pipeline
+}
 
 func (app *TriangleApplication) cleanup() {
+	if app.pipeline != nil {
+		app.pipeline.Cleanup(app.device)
+	}
 	vk.DestroyDevice(app.device, nil)
 	vk.DestroySurface(app.instance, app.surface, nil)
 	vk.DestroyInstance(app.instance, nil)
@@ -314,6 +330,7 @@ func main() {
 		},
 		RequiredDeviceExtensionNames: []string{
 			"VK_KHR_portability_subset",
+			vk.KhrSwapchainExtensionName,
 		},
 	}
 	app.Run()
