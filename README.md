@@ -1,6 +1,6 @@
 # vulkangotriangle
 
-This tutorial follows my personal execution of the [Vulkan tutorial](https://vulkan-tutorial.com/), with the distinction of being in Go instead of C++. The steps of each commit are available on [Vulkan, Go, and a Triangle](https://virtsoftcrazy.blogspot.com/2021/10/vulcan-go-and-triangle-part-1.html).
+This tutorial follows my personal execution of the [Vulkan tutorial](https://vulkan-tutorial.com/), with the distinction of being in Go instead of C++. The steps of each commit are available on [Vulkan, Go, and a Triangle](https://virtsoftcrazy.blogspot.com/2021/10/vulcan-go-and-triangle-part-1.html) and in the repository under the [tutorial folder](https://github.com/ibd1279/vulkangotutorial/tree/main/tutorial).
 
 I started this effort because Go is my preferred programming language and I was interested in understanding more about the modern landscape of GPU programing. While I was able to find a Vulkan tutorial translated for Rust, I could not find an existing one for Go.
 
@@ -11,16 +11,6 @@ While my exploration of Vulkan follows the general approach of the [Vulkan Tutor
 This tutorial does not cover the entire vulkan tutorial. Instead it focuses on the [Drawing a Triangle](https://vulkan-tutorial.com/Drawing_a_triangle/Setup/Base_code) section of the tutorial.
 
 Since this tutorial is based on the Vulkan Tutorial, the scope is limited in a similar way. It doesn't expect knowledge of OpenGL, but it does expect a basic understanding of computer graphics.
-
-## Approach
-
-The Vulkan Tutorial is more comfortable with changing lines of already written code. The result is that the tutorial adds a concept, then abstracts it when needed.
-
-I generally prefer tutorials to be additive. As a result I generally introduce the abstraction / helper functions earlier in order to avoid changed lines in the diffs.
-
-Often, where the vulkan tutorial adds methods on the application class for each function, I've decided to use anonymous functions inside of a method. I felt this kept many of the related concepts closer together.
-
-Lastly, my implementation panics on failures. I don't really handle them, as this is a tutorial and not a final application.
 
 ## Resources
 
