@@ -22,6 +22,10 @@ type TriangleApplication struct {
 	instance                       vk.Instance
 	RequiredInstanceExtensionNames []string
 	RequiredInstanceLayerNames     []string
+
+	surface                   vk.Surface
+	physicalDevice            PhysicalDevice
+	SelectPhysicalDeviceIndex func([]PhysicalDevice, vk.Surface) int
 }
 
 func (app *TriangleApplication) setup() {
@@ -118,8 +122,39 @@ func (app *TriangleApplication) setup() {
 		vk.InitInstance(app.instance)
 	}
 
-	createSurface := func() {}
-	pickPhysicalDevice := func() {}
+	createSurface := func() {
+		// Get the surface from the Window.
+		surface, err := app.window.CreateWindowSurface(app.instance, nil)
+		if err != nil {
+			panic(err)
+		}
+
+		// Store the handle
+		app.surface = vk.SurfaceFromPointer(surface)
+	}
+
+	pickPhysicalDevice := func() {
+		// Output all the physical devices.
+		physicalDevices := EnumeratePhysicalDevices(app.instance)
+		for k, phyDev := range physicalDevices {
+			fmt.Printf("Physical Device Avail %d: %v\n", k, phyDev)
+		}
+
+		// fail if we have zero of them.
+		if len(physicalDevices) == 0 {
+			panic(fmt.Errorf("failed to find GPUs with Vulkan support!"))
+		}
+
+		// Ask the application to select a device.
+		idx := app.SelectPhysicalDeviceIndex(physicalDevices,
+			app.surface)
+		if idx >= 0 && idx < len(physicalDevices) {
+			app.physicalDevice = physicalDevices[idx]
+		} else {
+			panic(fmt.Errorf("failed to select a physical device, got index %d", idx))
+		}
+	}
+
 	createLogicalDevice := func() {}
 	createCommandPool := func() {}
 	createSemaphores := func() {}
@@ -150,6 +185,7 @@ func (app *TriangleApplication) drawFrame() {}
 func (app *TriangleApplication) recreatePipeline() {}
 
 func (app *TriangleApplication) cleanup() {
+	vk.DestroySurface(app.instance, app.surface, nil)
 	vk.DestroyInstance(app.instance, nil)
 	app.window.Destroy()
 	glfw.Terminate()
@@ -166,6 +202,20 @@ func main() {
 		RequiredInstanceExtensionNames: []string{},
 		RequiredInstanceLayerNames: []string{
 			"VK_LAYER_KHRONOS_validation",
+		},
+		SelectPhysicalDeviceIndex: func(physicalDevices []PhysicalDevice, surface vk.Surface) int {
+			// Select a device
+			for k, phyDev := range physicalDevices {
+				gIdx, pIdx := phyDev.QueueFamilies(surface)
+				_, fmts, modes := phyDev.SwapchainSupport(surface)
+				if gIdx.IsSet() && pIdx.IsSet() && len(fmts) > 0 && len(modes) > 0 {
+					fmt.Printf("Physical Device Selected: %d %s\n",
+						k,
+						phyDev)
+					return k
+				}
+			}
+			return -1
 		},
 	}
 	app.Run()
@@ -237,4 +287,169 @@ func ExtensionPropertiesNames(props []vk.ExtensionProperties) []string {
 	}
 
 	return names
+}
+
+// Physical Device
+type PhysicalDevice struct {
+	Handle                vk.PhysicalDevice
+	Properties            vk.PhysicalDeviceProperties
+	Features              vk.PhysicalDeviceFeatures
+	LayerProperties       []vk.LayerProperties
+	ExtensionProperties   []vk.ExtensionProperties
+	QueueFamilyProperties []vk.QueueFamilyProperties
+}
+
+func EnumeratePhysicalDevices(instance vk.Instance) []PhysicalDevice {
+	// 2-call enumerate the devices
+	var count uint32
+	vk.EnumeratePhysicalDevices(instance, &count, nil)
+	list := make([]vk.PhysicalDevice, count)
+	vk.EnumeratePhysicalDevices(instance, &count, list)
+
+	// Loop over each device and get extra data.
+	physicalDevices := make([]PhysicalDevice, len(list))
+	for k, phyDev := range list {
+		// Store the Handle.
+		physicalDevices[k].Handle = phyDev
+
+		// Get the physical device properties.
+		vk.GetPhysicalDeviceProperties(phyDev, &physicalDevices[k].Properties)
+
+		// Get the physical device features.
+		vk.GetPhysicalDeviceFeatures(phyDev, &physicalDevices[k].Features)
+
+		// 2-call enumerate the layer properties.
+		vk.EnumerateDeviceLayerProperties(phyDev, &count, nil)
+		physicalDevices[k].LayerProperties = make([]vk.LayerProperties, count)
+		vk.EnumerateDeviceLayerProperties(phyDev, &count, physicalDevices[k].LayerProperties)
+
+		// 2-call enumerate the extension properties.
+		vk.EnumerateDeviceExtensionProperties(phyDev, "", &count, nil)
+		physicalDevices[k].ExtensionProperties = make([]vk.ExtensionProperties, count)
+		vk.EnumerateDeviceExtensionProperties(phyDev, "", &count, physicalDevices[k].ExtensionProperties)
+
+		// 2-call enumerate the queue family properties.
+		vk.GetPhysicalDeviceQueueFamilyProperties(phyDev, &count, nil)
+		physicalDevices[k].QueueFamilyProperties = make([]vk.QueueFamilyProperties, count)
+		vk.GetPhysicalDeviceQueueFamilyProperties(phyDev, &count, physicalDevices[k].QueueFamilyProperties)
+
+		// Dereference the data.
+		physicalDevices[k].Properties.Deref()
+		physicalDevices[k].Properties.Limits.Deref()
+		physicalDevices[k].Features.Deref()
+		for h := 0; h < len(physicalDevices[k].LayerProperties); h++ {
+			physicalDevices[k].LayerProperties[h].Deref()
+		}
+		for h := 0; h < len(physicalDevices[k].ExtensionProperties); h++ {
+			physicalDevices[k].ExtensionProperties[h].Deref()
+		}
+		for h := 0; h < len(physicalDevices[k].QueueFamilyProperties); h++ {
+			physicalDevices[k].QueueFamilyProperties[h].Deref()
+		}
+	}
+
+	// return the result.
+	return physicalDevices
+}
+
+func (phyDev PhysicalDevice) String() string {
+	devName := vk.ToString(phyDev.Properties.DeviceName[:])
+
+	devType := "other"
+	switch phyDev.Properties.DeviceType {
+	case vk.PhysicalDeviceTypeIntegratedGpu:
+		devType = "Integrated GPU"
+		break
+	case vk.PhysicalDeviceTypeDiscreteGpu:
+		devType = "Discrete GPU"
+		break
+	case vk.PhysicalDeviceTypeVirtualGpu:
+		devType = "Virtual GPU"
+		break
+	case vk.PhysicalDeviceTypeCpu:
+		devType = "CPU"
+		break
+	}
+
+	queueFamilyFlags := make([]string, len(phyDev.QueueFamilyProperties))
+	for h := 0; h < len(phyDev.QueueFamilyProperties); h++ {
+		queueFamilyFlags[h] = fmt.Sprintf("%d={flags: %05b}",
+			h,
+			phyDev.QueueFamilyProperties[h].QueueFlags)
+	}
+
+	return fmt.Sprintf("%s(%s) QueueFamilies:%v",
+		devName, devType,
+		queueFamilyFlags,
+	)
+}
+
+func (phyDev PhysicalDevice) QueueFamilies(surface vk.Surface) (graphics, presentation OptionUint32) {
+	// Iterate over Queue Families to find support.
+	for k, v := range phyDev.QueueFamilyProperties {
+		// cast as everything is expecting a uint32
+		index := uint32(k)
+
+		// Check if the queue supports graphics commands.
+		if v.QueueFlags&vk.QueueFlags(vk.QueueGraphicsBit) != 0 {
+			graphics.Set(index)
+		}
+
+		// check if this physical device can draw to our surface.
+		var presentSupport vk.Bool32
+		vk.GetPhysicalDeviceSurfaceSupport(
+			phyDev.Handle,
+			index,
+			surface,
+			&presentSupport,
+		)
+		if presentSupport.B() {
+			presentation.Set(index)
+		}
+
+		// If both families have values, we can stop iteration.
+		if graphics.IsSet() && presentation.IsSet() {
+			break
+		}
+	}
+	return graphics, presentation
+}
+
+func (phyDev PhysicalDevice) SwapchainSupport(surface vk.Surface) (capabilities vk.SurfaceCapabilities, formats []vk.SurfaceFormat, presentModes []vk.PresentMode) {
+	// Get the intersection of capabilities.
+	vk.GetPhysicalDeviceSurfaceCapabilities(phyDev.Handle,
+		surface,
+		&capabilities)
+	capabilities.Deref()
+	capabilities.CurrentExtent.Deref()
+	capabilities.MinImageExtent.Deref()
+	capabilities.MaxImageExtent.Deref()
+
+	// 2-call enumerate the formats.
+	var count uint32
+	vk.GetPhysicalDeviceSurfaceFormats(phyDev.Handle,
+		surface,
+		&count,
+		nil)
+	formats = make([]vk.SurfaceFormat, count)
+	vk.GetPhysicalDeviceSurfaceFormats(phyDev.Handle,
+		surface,
+		&count,
+		formats)
+	for k, _ := range formats {
+		formats[k].Deref()
+	}
+
+	// 2-call enumerate the present modes.
+	vk.GetPhysicalDeviceSurfacePresentModes(phyDev.Handle,
+		surface,
+		&count,
+		nil)
+	presentModes = make([]vk.PresentMode, count)
+	vk.GetPhysicalDeviceSurfacePresentModes(phyDev.Handle,
+		surface,
+		&count,
+		presentModes)
+
+	return capabilities, formats, presentModes
 }
