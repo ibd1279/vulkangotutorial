@@ -15,6 +15,9 @@ type Pipeline struct {
 	RenderPass     vk.RenderPass
 	PipelineLayout vk.PipelineLayout
 	Pipelines      []vk.Pipeline
+
+	graphicsCommandPool    vk.CommandPool
+	GraphicsCommandBuffers []vk.CommandBuffer
 }
 
 func NewPipeline(app *TriangleApplication, oldPipeline *Pipeline) *Pipeline {
@@ -394,17 +397,76 @@ func NewPipeline(app *TriangleApplication, oldPipeline *Pipeline) *Pipeline {
 		return pipelines
 	}()
 
+	commandBuffers := func() []vk.CommandBuffer {
+		// Create the info object.
+		buffersInfo := vk.CommandBufferAllocateInfo{
+			SType:              vk.StructureTypeCommandBufferAllocateInfo,
+			CommandPool:        app.graphicsCommandPool,
+			Level:              vk.CommandBufferLevelPrimary,
+			CommandBufferCount: uint32(len(framebuffers)),
+		}
+
+		// Create the result object.
+		buffers := make([]vk.CommandBuffer, buffersInfo.CommandBufferCount)
+
+		// Call the vulkan function.
+		MustSucceed(vk.AllocateCommandBuffers(app.device, &buffersInfo, buffers))
+
+		// Record the commands.
+		for k, cmdBuffer := range buffers {
+			// Start recording
+			MustSucceed(vk.BeginCommandBuffer(cmdBuffer, &vk.CommandBufferBeginInfo{
+				SType: vk.StructureTypeCommandBufferBeginInfo,
+			}))
+
+			// Create the info object.
+			beginInfo := vk.RenderPassBeginInfo{
+				SType:       vk.StructureTypeRenderPassBeginInfo,
+				RenderPass:  renderPass,
+				Framebuffer: framebuffers[k],
+				RenderArea: vk.Rect2D{
+					Offset: vk.Offset2D{X: 0, Y: 0},
+					Extent: extent,
+				},
+				ClearValueCount: 1,
+				PClearValues: []vk.ClearValue{
+					vk.NewClearValue([]float32{0.0, 0.0, 0.0, 1.0}),
+				},
+			}
+
+			// Call the Vulkan function.
+			vk.CmdBeginRenderPass(cmdBuffer, &beginInfo, vk.SubpassContentsInline)
+
+			// Bind the buffer to the graphics point in the pipeline.
+			vk.CmdBindPipeline(cmdBuffer, vk.PipelineBindPointGraphics, pipelines[0])
+
+			// Draw
+			vk.CmdDraw(cmdBuffer, 3, 1, 0, 0)
+
+			// End the render pass
+			vk.CmdEndRenderPass(cmdBuffer)
+
+			// Stop recording
+			MustSucceed(vk.EndCommandBuffer(cmdBuffer))
+		}
+
+		// Return the command buffers.
+		return buffers
+	}()
+
 	// Create and return the pipeline
 	return &Pipeline{
-		Swapchain:             swapchain,
-		SwapchainImages:       swapchainImages,
-		SwapchainImageFormat:  format.Format,
-		SwapchainExtent:       extent,
-		SwapchainImageViews:   imageViews,
-		SwapchainFramebuffers: framebuffers,
-		RenderPass:            renderPass,
-		PipelineLayout:        pipelineLayout,
-		Pipelines:             pipelines,
+		Swapchain:              swapchain,
+		SwapchainImages:        swapchainImages,
+		SwapchainImageFormat:   format.Format,
+		SwapchainExtent:        extent,
+		SwapchainImageViews:    imageViews,
+		SwapchainFramebuffers:  framebuffers,
+		RenderPass:             renderPass,
+		PipelineLayout:         pipelineLayout,
+		Pipelines:              pipelines,
+		graphicsCommandPool:    app.graphicsCommandPool,
+		GraphicsCommandBuffers: commandBuffers,
 	}
 }
 
@@ -412,6 +474,11 @@ func (pipeline *Pipeline) Cleanup(device vk.Device) {
 	for _, buffer := range pipeline.SwapchainFramebuffers {
 		vk.DestroyFramebuffer(device, buffer, nil)
 	}
+
+	vk.FreeCommandBuffers(device,
+		pipeline.graphicsCommandPool,
+		uint32(len(pipeline.GraphicsCommandBuffers)),
+		pipeline.GraphicsCommandBuffers)
 
 	for _, pl := range pipeline.Pipelines {
 		vk.DestroyPipeline(device, pl, nil)

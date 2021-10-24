@@ -33,7 +33,15 @@ type TriangleApplication struct {
 	graphicsQueue                vk.Queue
 	presentationQueue            vk.Queue
 
-	pipeline *Pipeline
+	pipeline            *Pipeline
+	graphicsCommandPool vk.CommandPool
+
+	imageAvailableSemaphores []vk.Semaphore
+	renderFinishedSemaphores []vk.Semaphore
+	inFlightFences           []vk.Fence
+	imagesInFlight           []vk.Fence
+	currentFrame             uint
+	FramesInFlight           uint
 }
 
 func (app *TriangleApplication) setup() {
@@ -249,9 +257,68 @@ func (app *TriangleApplication) setup() {
 		app.presentationQueue = queue
 	}
 
-	createCommandPool := func() {}
-	createSemaphores := func() {}
-	createFences := func() {}
+	createCommandPool := func() {
+		// Get the queue families
+		gIdx, _ := app.physicalDevice.QueueFamilies(app.surface)
+
+		// Create the info object.
+		poolInfo := vk.CommandPoolCreateInfo{
+			SType:            vk.StructureTypeCommandPoolCreateInfo,
+			QueueFamilyIndex: gIdx.Val(),
+		}
+
+		// Create the result object.
+		var commandPool vk.CommandPool
+
+		// Call the Vulkan function.
+		MustSucceed(vk.CreateCommandPool(app.device, &poolInfo, nil, &commandPool))
+
+		// Update the application.
+		app.graphicsCommandPool = commandPool
+	}
+
+	createSemaphores := func() {
+		// Create the info object.
+		semaphoreInfo := vk.SemaphoreCreateInfo{
+			SType: vk.StructureTypeSemaphoreCreateInfo,
+		}
+
+		// Create the result object(s).
+		imgAvail := make([]vk.Semaphore, app.FramesInFlight)
+		renderDone := make([]vk.Semaphore, app.FramesInFlight)
+
+		// Call the Vulkan function...
+		for h := 0; h < len(imgAvail); h++ {
+			// ... for image available.
+			MustSucceed(vk.CreateSemaphore(app.device, &semaphoreInfo, nil, &imgAvail[h]))
+
+			// ... for render finished.
+			MustSucceed(vk.CreateSemaphore(app.device, &semaphoreInfo, nil, &renderDone[h]))
+		}
+
+		// Update the application.
+		app.imageAvailableSemaphores = imgAvail
+		app.renderFinishedSemaphores = renderDone
+	}
+
+	createFences := func() {
+		// Create the info object.
+		fenceInfo := vk.FenceCreateInfo{
+			SType: vk.StructureTypeFenceCreateInfo,
+			Flags: vk.FenceCreateFlags(vk.FenceCreateSignaledBit),
+		}
+
+		// Create the result object.
+		inFlightFences := make([]vk.Fence, app.FramesInFlight)
+
+		// Call the Vulkan function.
+		for k, _ := range inFlightFences {
+			MustSucceed(vk.CreateFence(app.device, &fenceInfo, nil, &inFlightFences[k]))
+		}
+
+		// Update the application.
+		app.inFlightFences = inFlightFences
+	}
 
 	// Calls
 	createWindow()
@@ -276,6 +343,9 @@ func (app *TriangleApplication) mainLoop() {
 func (app *TriangleApplication) drawFrame() {}
 
 func (app *TriangleApplication) recreatePipeline() {
+	// Wait for the device to finish work.
+	vk.DeviceWaitIdle(app.device)
+
 	// Create the new pipeline.
 	pipeline := NewPipeline(app, app.pipeline)
 
@@ -286,12 +356,26 @@ func (app *TriangleApplication) recreatePipeline() {
 
 	// Update the application.
 	app.pipeline = pipeline
+
+	// Allocate Images in flight tracker.
+	app.imagesInFlight = make([]vk.Fence, len(app.pipeline.SwapchainImages))
 }
 
 func (app *TriangleApplication) cleanup() {
 	if app.pipeline != nil {
 		app.pipeline.Cleanup(app.device)
 	}
+
+	for _, fence := range app.inFlightFences {
+		vk.DestroyFence(app.device, fence, nil)
+	}
+	for _, semaphore := range app.renderFinishedSemaphores {
+		vk.DestroySemaphore(app.device, semaphore, nil)
+	}
+	for _, semaphore := range app.imageAvailableSemaphores {
+		vk.DestroySemaphore(app.device, semaphore, nil)
+	}
+	vk.DestroyCommandPool(app.device, app.graphicsCommandPool, nil)
 	vk.DestroyDevice(app.device, nil)
 	vk.DestroySurface(app.instance, app.surface, nil)
 	vk.DestroyInstance(app.instance, nil)
@@ -332,6 +416,7 @@ func main() {
 			"VK_KHR_portability_subset",
 			vk.KhrSwapchainExtensionName,
 		},
+		FramesInFlight: 2,
 	}
 	app.Run()
 }
