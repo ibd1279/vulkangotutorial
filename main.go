@@ -26,6 +26,12 @@ type TriangleApplication struct {
 	surface                   vk.Surface
 	physicalDevice            PhysicalDevice
 	SelectPhysicalDeviceIndex func([]PhysicalDevice, vk.Surface) int
+
+	RequiredDeviceExtensionNames []string
+	RequiredDeviceLayerNames     []string
+	device                       vk.Device
+	graphicsQueue                vk.Queue
+	presentationQueue            vk.Queue
 }
 
 func (app *TriangleApplication) setup() {
@@ -140,6 +146,41 @@ func (app *TriangleApplication) setup() {
 			fmt.Printf("Physical Device Avail %d: %v\n", k, phyDev)
 		}
 
+		// Filter devices based on required support.
+		filteredPhysicalDevices := make([]PhysicalDevice, 0, len(physicalDevices))
+		for _, phyDev := range physicalDevices {
+			// Get device layer support.
+			availLayerNames, _ := LayerPropertiesNamesAndDescriptions(
+				phyDev.LayerProperties,
+			)
+
+			// Calculate missing layers.
+			missingLayerNames := SetSubtraction(
+				app.RequiredDeviceLayerNames,
+				SliceToMap(availLayerNames),
+			)
+
+			// Get device extension support.
+			availExtNames := ExtensionPropertiesNames(
+				phyDev.ExtensionProperties,
+			)
+
+			// Calculate missing extensions.
+			missingExtNames := SetSubtraction(
+				app.RequiredDeviceExtensionNames,
+				SliceToMap(availExtNames),
+			)
+
+			// Add supported devices.
+			if len(missingLayerNames) == 0 && len(missingExtNames) == 0 {
+				filteredPhysicalDevices = append(
+					filteredPhysicalDevices,
+					phyDev,
+				)
+			}
+		}
+		physicalDevices = filteredPhysicalDevices
+
 		// fail if we have zero of them.
 		if len(physicalDevices) == 0 {
 			panic(fmt.Errorf("failed to find GPUs with Vulkan support!"))
@@ -155,7 +196,57 @@ func (app *TriangleApplication) setup() {
 		}
 	}
 
-	createLogicalDevice := func() {}
+	createLogicalDevice := func() {
+		// Calculate the number of queue info structs.
+		gIdx, pIdx := app.physicalDevice.QueueFamilies(app.surface)
+		queueFamilyIndices := []uint32{gIdx.Val(), pIdx.Val()}
+		if gIdx.Val() == pIdx.Val() {
+			queueFamilyIndices = queueFamilyIndices[:1]
+		}
+
+		// Populate the queue infos.
+		queueCreateInfos := make([]vk.DeviceQueueCreateInfo, len(queueFamilyIndices))
+		for k, idx := range queueFamilyIndices {
+			queueCreateInfos[k] = vk.DeviceQueueCreateInfo{
+				SType:            vk.StructureTypeDeviceQueueCreateInfo,
+				QueueFamilyIndex: idx,
+				QueueCount:       1,
+				PQueuePriorities: []float32{1.0},
+			}
+		}
+
+		// Create the info object.
+		deviceInfo := vk.DeviceCreateInfo{
+			SType:                   vk.StructureTypeDeviceCreateInfo,
+			QueueCreateInfoCount:    uint32(len(queueCreateInfos)),
+			PQueueCreateInfos:       queueCreateInfos,
+			EnabledLayerCount:       uint32(len(app.RequiredDeviceLayerNames)),
+			PpEnabledLayerNames:     ToCStrings(app.RequiredDeviceLayerNames),
+			EnabledExtensionCount:   uint32(len(app.RequiredDeviceExtensionNames)),
+			PpEnabledExtensionNames: ToCStrings(app.RequiredDeviceExtensionNames),
+		}
+
+		// Create the result object.
+		var device vk.Device
+
+		// Call the Vulkan function.
+		MustSucceed(vk.CreateDevice(app.physicalDevice.Handle, &deviceInfo, nil, &device))
+
+		// Update the application.
+		app.device = device
+
+		// Fetch the graphics queue handle.
+		var queue vk.Queue
+		queueIndex := 0
+		vk.GetDeviceQueue(app.device, queueFamilyIndices[queueIndex], uint32(queueIndex), &queue)
+		app.graphicsQueue = queue
+
+		// Fetch the presentation queue handle.
+		queueIndex = len(queueFamilyIndices) - 1
+		vk.GetDeviceQueue(app.device, queueFamilyIndices[queueIndex], uint32(queueIndex), &queue)
+		app.presentationQueue = queue
+	}
+
 	createCommandPool := func() {}
 	createSemaphores := func() {}
 	createFences := func() {}
@@ -185,6 +276,7 @@ func (app *TriangleApplication) drawFrame() {}
 func (app *TriangleApplication) recreatePipeline() {}
 
 func (app *TriangleApplication) cleanup() {
+	vk.DestroyDevice(app.device, nil)
 	vk.DestroySurface(app.instance, app.surface, nil)
 	vk.DestroyInstance(app.instance, nil)
 	app.window.Destroy()
@@ -216,6 +308,12 @@ func main() {
 				}
 			}
 			return -1
+		},
+		RequiredDeviceLayerNames: []string{
+			"VK_LAYER_KHRONOS_validation",
+		},
+		RequiredDeviceExtensionNames: []string{
+			"VK_KHR_portability_subset",
 		},
 	}
 	app.Run()
