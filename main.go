@@ -4,6 +4,7 @@ import (
 	"runtime"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
+	vk "github.com/vulkan-go/vulkan"
 )
 
 func init() {
@@ -16,7 +17,8 @@ const (
 )
 
 type TriangleApplication struct {
-	window *glfw.Window
+	window   *glfw.Window
+	instance vk.Instance
 }
 
 func (app *TriangleApplication) setup() {
@@ -41,8 +43,47 @@ func (app *TriangleApplication) setup() {
 		}
 	}
 
-	initVulkan := func() {}
-	createInstance := func() {}
+	initVulkan := func() {
+		// Link Vulkan and GLFW
+		vk.SetGetInstanceProcAddr(glfw.GetVulkanGetInstanceProcAddress())
+
+		// Initialize Vulkan
+		if err := vk.Init(); err != nil {
+			panic(err)
+		}
+	}
+
+	createInstance := func() {
+		// Create the info object.
+		instanceInfo := vk.InstanceCreateInfo{
+			SType: vk.StructureTypeInstanceCreateInfo,
+			PApplicationInfo: &vk.ApplicationInfo{
+				SType:              vk.StructureTypeApplicationInfo,
+				PApplicationName:   ToCString("Hello Triangle"),
+				ApplicationVersion: vk.MakeVersion(1, 0, 0),
+				PEngineName:        ToCString("No Engine"),
+				EngineVersion:      vk.MakeVersion(1, 0, 0),
+				ApiVersion:         vk.ApiVersion11,
+			},
+			EnabledExtensionCount:   0,
+			PpEnabledExtensionNames: []string{},
+			EnabledLayerCount:       0,
+			PpEnabledLayerNames:     []string{},
+		}
+
+		// Create the result object.
+		var instance vk.Instance
+
+		// Call the Vulkan function.
+		MustSucceed(vk.CreateInstance(&instanceInfo, nil, &instance))
+
+		// Update the application.
+		app.instance = instance
+
+		// InitInstance is required for macOs?
+		vk.InitInstance(app.instance)
+	}
+
 	createSurface := func() {}
 	pickPhysicalDevice := func() {}
 	createLogicalDevice := func() {}
@@ -75,6 +116,7 @@ func (app *TriangleApplication) drawFrame() {}
 func (app *TriangleApplication) recreatePipeline() {}
 
 func (app *TriangleApplication) cleanup() {
+	vk.DestroyInstance(app.instance, nil)
 	app.window.Destroy()
 	glfw.Terminate()
 }
