@@ -14,6 +14,7 @@ type Pipeline struct {
 
 	RenderPass     vk.RenderPass
 	PipelineLayout vk.PipelineLayout
+	Pipelines      []vk.Pipeline
 }
 
 func NewPipeline(app *TriangleApplication, oldPipeline *Pipeline) *Pipeline {
@@ -263,6 +264,136 @@ func NewPipeline(app *TriangleApplication, oldPipeline *Pipeline) *Pipeline {
 		return layout
 	}()
 
+	// Create the pipelines.
+	pipelines := func() []vk.Pipeline {
+		// Function for loading a shader.
+		loadShaderModule := func(fn string) vk.ShaderModule {
+			// load the shader bytes
+			shaderWords := NewWordsUint32(MustReadFile(fn))
+
+			// Create the info object.
+			shaderInfo := vk.ShaderModuleCreateInfo{
+				SType:    vk.StructureTypeShaderModuleCreateInfo,
+				CodeSize: shaderWords.Sizeof(),
+				PCode:    []uint32(shaderWords),
+			}
+
+			// Create the result object.
+			var shaderModule vk.ShaderModule
+
+			// Call the Vulkan function.
+			MustSucceed(vk.CreateShaderModule(app.device, &shaderInfo, nil, &shaderModule))
+
+			// return the handle
+			return shaderModule
+		}
+
+		// Create the vertex shader
+		vertShaderModule := loadShaderModule("shaders/vert.spv")
+		defer vk.DestroyShaderModule(app.device, vertShaderModule, nil)
+
+		// Create the fragment shader
+		fragShaderModule := loadShaderModule("shaders/frag.spv")
+		defer vk.DestroyShaderModule(app.device, fragShaderModule, nil)
+
+		// Create the ShaderStage info objects.
+		shaderStages := []vk.PipelineShaderStageCreateInfo{
+			vk.PipelineShaderStageCreateInfo{
+				SType:  vk.StructureTypePipelineShaderStageCreateInfo,
+				Stage:  vk.ShaderStageVertexBit,
+				Module: vertShaderModule,
+				PName:  ToCString("main"),
+			},
+			vk.PipelineShaderStageCreateInfo{
+				SType:  vk.StructureTypePipelineShaderStageCreateInfo,
+				Stage:  vk.ShaderStageFragmentBit,
+				Module: fragShaderModule,
+				PName:  ToCString("main"),
+			},
+		}
+
+		// Create the info object.
+		pipelineInfos := []vk.GraphicsPipelineCreateInfo{
+			vk.GraphicsPipelineCreateInfo{
+				SType:      vk.StructureTypeGraphicsPipelineCreateInfo,
+				StageCount: uint32(len(shaderStages)),
+				PStages:    shaderStages,
+				PVertexInputState: &vk.PipelineVertexInputStateCreateInfo{
+					SType:                           vk.StructureTypePipelineVertexInputStateCreateInfo,
+					VertexBindingDescriptionCount:   0,
+					VertexAttributeDescriptionCount: 0,
+				},
+				PInputAssemblyState: &vk.PipelineInputAssemblyStateCreateInfo{
+					SType:                  vk.StructureTypePipelineInputAssemblyStateCreateInfo,
+					Topology:               vk.PrimitiveTopologyTriangleList,
+					PrimitiveRestartEnable: vk.False,
+				},
+				PViewportState: &vk.PipelineViewportStateCreateInfo{
+					SType:         vk.StructureTypePipelineViewportStateCreateInfo,
+					ViewportCount: 1,
+					PViewports: []vk.Viewport{
+						vk.Viewport{
+							Width:    float32(extent.Width),
+							Height:   float32(extent.Height),
+							MaxDepth: 1.0,
+						},
+					},
+					ScissorCount: 1,
+					PScissors: []vk.Rect2D{
+						vk.Rect2D{
+							Offset: vk.Offset2D{},
+							Extent: extent,
+						},
+					},
+				},
+				PRasterizationState: &vk.PipelineRasterizationStateCreateInfo{
+					SType:                   vk.StructureTypePipelineRasterizationStateCreateInfo,
+					DepthClampEnable:        vk.False,
+					RasterizerDiscardEnable: vk.False,
+					PolygonMode:             vk.PolygonModeFill,
+					LineWidth:               1.0,
+					CullMode:                vk.CullModeFlags(vk.CullModeBackBit),
+					FrontFace:               vk.FrontFaceClockwise,
+					DepthBiasEnable:         vk.False,
+				},
+				PMultisampleState: &vk.PipelineMultisampleStateCreateInfo{
+					SType:                vk.StructureTypePipelineMultisampleStateCreateInfo,
+					SampleShadingEnable:  vk.False,
+					RasterizationSamples: vk.SampleCount1Bit,
+				},
+				PColorBlendState: &vk.PipelineColorBlendStateCreateInfo{
+					SType:           vk.StructureTypePipelineColorBlendStateCreateInfo,
+					LogicOpEnable:   vk.False,
+					LogicOp:         vk.LogicOpCopy,
+					AttachmentCount: 1,
+					PAttachments: []vk.PipelineColorBlendAttachmentState{
+						vk.PipelineColorBlendAttachmentState{
+							ColorWriteMask: vk.ColorComponentFlags(vk.ColorComponentRBit | vk.ColorComponentGBit | vk.ColorComponentBBit | vk.ColorComponentABit),
+							BlendEnable:    vk.False,
+						},
+					},
+				},
+				Layout:     pipelineLayout,
+				RenderPass: renderPass,
+				Subpass:    0,
+			},
+		}
+
+		// Create the result object.
+		pipelines := make([]vk.Pipeline, len(pipelineInfos))
+
+		// Call the Vulkan function.
+		MustSucceed(vk.CreateGraphicsPipelines(app.device,
+			vk.PipelineCache(vk.NullHandle),
+			1,
+			pipelineInfos,
+			nil,
+			pipelines))
+
+		// Return the pipelines.
+		return pipelines
+	}()
+
 	// Create and return the pipeline
 	return &Pipeline{
 		Swapchain:             swapchain,
@@ -273,6 +404,7 @@ func NewPipeline(app *TriangleApplication, oldPipeline *Pipeline) *Pipeline {
 		SwapchainFramebuffers: framebuffers,
 		RenderPass:            renderPass,
 		PipelineLayout:        pipelineLayout,
+		Pipelines:             pipelines,
 	}
 }
 
@@ -281,6 +413,9 @@ func (pipeline *Pipeline) Cleanup(device vk.Device) {
 		vk.DestroyFramebuffer(device, buffer, nil)
 	}
 
+	for _, pl := range pipeline.Pipelines {
+		vk.DestroyPipeline(device, pl, nil)
+	}
 	vk.DestroyPipelineLayout(device, pipeline.PipelineLayout, nil)
 	vk.DestroyRenderPass(device, pipeline.RenderPass, nil)
 	for _, imgView := range pipeline.SwapchainImageViews {
