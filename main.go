@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"runtime"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
@@ -17,8 +18,10 @@ const (
 )
 
 type TriangleApplication struct {
-	window   *glfw.Window
-	instance vk.Instance
+	window                         *glfw.Window
+	instance                       vk.Instance
+	RequiredInstanceExtensionNames []string
+	RequiredInstanceLayerNames     []string
 }
 
 func (app *TriangleApplication) setup() {
@@ -41,6 +44,12 @@ func (app *TriangleApplication) setup() {
 		if err != nil {
 			panic(err)
 		}
+
+		// Update required extensions.
+		app.RequiredInstanceExtensionNames = append(
+			app.RequiredInstanceExtensionNames,
+			app.window.GetRequiredInstanceExtensions()...,
+		)
 	}
 
 	initVulkan := func() {
@@ -54,6 +63,31 @@ func (app *TriangleApplication) setup() {
 	}
 
 	createInstance := func() {
+		// Available Instance Layers.
+		layerProps := EnumerateInstanceLayerProperties()
+		availLayerNames, availLayerDescs := LayerPropertiesNamesAndDescriptions(layerProps)
+		for h := 0; h < len(layerProps); h++ {
+			fmt.Printf("Layer Avail: %s %s\n",
+				availLayerNames[h],
+				availLayerDescs[h])
+		}
+
+		// Required Instance Layers.
+		reqLayerNames := ToCStrings(DedupeSlice(app.RequiredInstanceLayerNames))
+		MustSupport(availLayerNames, reqLayerNames)
+
+		// Available Instance Extensions.
+		layerExts := EnumerateInstanceExtensionProperties("")
+		availExtNames := ExtensionPropertiesNames(layerExts)
+		for h := 0; h < len(layerExts); h++ {
+			fmt.Printf("Extension Avail: %s\n",
+				availExtNames[h])
+		}
+
+		// Required Instance Extensions.
+		reqExtNames := ToCStrings(DedupeSlice(app.RequiredInstanceExtensionNames))
+		MustSupport(availExtNames, reqExtNames)
+
 		// Create the info object.
 		instanceInfo := vk.InstanceCreateInfo{
 			SType: vk.StructureTypeInstanceCreateInfo,
@@ -65,10 +99,10 @@ func (app *TriangleApplication) setup() {
 				EngineVersion:      vk.MakeVersion(1, 0, 0),
 				ApiVersion:         vk.ApiVersion11,
 			},
-			EnabledExtensionCount:   0,
-			PpEnabledExtensionNames: []string{},
-			EnabledLayerCount:       0,
-			PpEnabledLayerNames:     []string{},
+			EnabledExtensionCount:   uint32(len(reqExtNames)),
+			PpEnabledExtensionNames: reqExtNames,
+			EnabledLayerCount:       uint32(len(reqLayerNames)),
+			PpEnabledLayerNames:     reqLayerNames,
 		}
 
 		// Create the result object.
@@ -128,6 +162,79 @@ func (app *TriangleApplication) Run() {
 }
 
 func main() {
-	app := TriangleApplication{}
+	app := TriangleApplication{
+		RequiredInstanceExtensionNames: []string{},
+		RequiredInstanceLayerNames: []string{
+			"VK_LAYER_KHRONOS_validation",
+		},
+	}
 	app.Run()
+}
+
+// LayerProperties
+func EnumerateInstanceLayerProperties() []vk.LayerProperties {
+	// Allocate the count.
+	var count uint32
+
+	// Call to get the count.
+	vk.EnumerateInstanceLayerProperties(&count, nil)
+
+	// Allocate to store the data.
+	list := make([]vk.LayerProperties, count)
+
+	// Call to get the data.
+	vk.EnumerateInstanceLayerProperties(&count, list)
+
+	// Dereference the data.
+	for k, _ := range list {
+		list[k].Deref()
+	}
+
+	// Return the result.
+	return list
+}
+
+// ExtensionProperties
+func EnumerateInstanceExtensionProperties(layerName string) []vk.ExtensionProperties {
+	// Allocate the count.
+	var count uint32
+
+	// Call to get the count.
+	vk.EnumerateInstanceExtensionProperties(layerName, &count, nil)
+
+	// Allocate to store the data.
+	list := make([]vk.ExtensionProperties, count)
+
+	// Call to get the data.
+	vk.EnumerateInstanceExtensionProperties(layerName, &count, list)
+
+	// Dereference the data.
+	for k, _ := range list {
+		list[k].Deref()
+	}
+
+	// Return the result.
+	return list
+}
+
+// Properties to Strings
+func LayerPropertiesNamesAndDescriptions(props []vk.LayerProperties) ([]string, []string) {
+	names, descs := make([]string, len(props)), make([]string, len(props))
+
+	for k, p := range props {
+		names[k] = vk.ToString(p.LayerName[:])
+		descs[k] = vk.ToString(p.Description[:])
+	}
+
+	return names, descs
+}
+
+func ExtensionPropertiesNames(props []vk.ExtensionProperties) []string {
+	names := make([]string, len(props))
+
+	for k, p := range props {
+		names[k] = vk.ToString(p.ExtensionName[:])
+	}
+
+	return names
 }
