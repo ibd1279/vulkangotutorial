@@ -42,6 +42,8 @@ type TriangleApplication struct {
 	imagesInFlight           []vk.Fence
 	currentFrame             uint
 	FramesInFlight           uint
+
+	framebufferResize bool
 }
 
 func (app *TriangleApplication) setup() {
@@ -56,14 +58,16 @@ func (app *TriangleApplication) setup() {
 		// Tell GLFW we aren't using OpenGL.
 		glfw.WindowHint(glfw.ClientAPI, glfw.NoAPI)
 
-		// We aren't yet ready to handle resizable windows.
-		glfw.WindowHint(glfw.Resizable, glfw.False)
-
 		// Create the window object.
 		app.window, err = glfw.CreateWindow(WindowWidth, WindowHeight, "Vulkan", nil, nil)
 		if err != nil {
 			panic(err)
 		}
+
+		// Callback for the framebuffer size changing.
+		app.window.SetFramebufferSizeCallback(func(*glfw.Window, int, int) {
+			app.framebufferResize = true
+		})
 
 		// Update required extensions.
 		app.RequiredInstanceExtensionNames = append(
@@ -340,9 +344,108 @@ func (app *TriangleApplication) mainLoop() {
 	}
 }
 
-func (app *TriangleApplication) drawFrame() {}
+func (app *TriangleApplication) drawFrame() {
+	// Wait for Vulkan to finish with this frame.
+	vk.WaitForFences(app.device,
+		1,
+		app.inFlightFences[app.currentFrame:],
+		vk.True,
+		vk.MaxUint64)
+
+	// Get the index of the next image.
+	var imageIndex uint32
+	ret := vk.AcquireNextImage(app.device,
+		app.pipeline.Swapchain,
+		vk.MaxUint64,
+		app.imageAvailableSemaphores[app.currentFrame],
+		vk.Fence(vk.NullHandle),
+		&imageIndex)
+	if ret == vk.ErrorOutOfDate {
+		app.recreatePipeline()
+		return
+	} else if ret != vk.Success && ret != vk.Suboptimal {
+		panic(vk.Error(ret))
+	}
+
+	// Wait for Vulkan to finish with this image.
+	if app.imagesInFlight[imageIndex] != vk.Fence(vk.NullHandle) {
+		vk.WaitForFences(app.device,
+			1,
+			app.imagesInFlight[imageIndex:],
+			vk.True,
+			vk.MaxUint64)
+	}
+
+	// Update inflight fences.
+	app.imagesInFlight[imageIndex] = app.inFlightFences[app.currentFrame]
+
+	// Create the graphics queue submit info object.
+	submitInfos := []vk.SubmitInfo{
+		vk.SubmitInfo{
+			SType:              vk.StructureTypeSubmitInfo,
+			WaitSemaphoreCount: 1,
+			PWaitSemaphores: []vk.Semaphore{
+				app.imageAvailableSemaphores[app.currentFrame],
+			},
+			PWaitDstStageMask: []vk.PipelineStageFlags{
+				vk.PipelineStageFlags(vk.PipelineStageColorAttachmentOutputBit),
+			},
+			CommandBufferCount: 1,
+			PCommandBuffers: []vk.CommandBuffer{
+				app.pipeline.GraphicsCommandBuffers[imageIndex],
+			},
+			SignalSemaphoreCount: 1,
+			PSignalSemaphores: []vk.Semaphore{
+				app.renderFinishedSemaphores[app.currentFrame],
+			},
+		},
+	}
+
+	// Reset the fence for this frame.
+	vk.ResetFences(app.device,
+		1,
+		app.inFlightFences[app.currentFrame:])
+
+	// Submit work to the graphics queue.
+	MustSucceed(vk.QueueSubmit(app.graphicsQueue, 1, submitInfos, app.inFlightFences[app.currentFrame]))
+
+	// Create the present queue info object.
+	presentInfo := vk.PresentInfo{
+		SType:              vk.StructureTypePresentInfo,
+		WaitSemaphoreCount: 1,
+		PWaitSemaphores: []vk.Semaphore{
+			app.renderFinishedSemaphores[app.currentFrame],
+		},
+		SwapchainCount: 1,
+		PSwapchains: []vk.Swapchain{
+			app.pipeline.Swapchain,
+		},
+		PImageIndices: []uint32{imageIndex},
+	}
+
+	// Submit work to the present queue.
+	ret = vk.QueuePresent(app.presentationQueue, &presentInfo)
+	if ret == vk.ErrorOutOfDate || ret == vk.Suboptimal || app.framebufferResize {
+		app.recreatePipeline()
+	} else if ret != vk.Success {
+		panic(fmt.Errorf("Failed to acquire next image. result %d.", ret))
+	}
+
+	// Update the current frame.
+	app.currentFrame = (app.currentFrame + 1) % app.FramesInFlight
+}
 
 func (app *TriangleApplication) recreatePipeline() {
+	// wait if the current framebuffer surface is 0
+	width, height := app.window.GetFramebufferSize()
+	for width == 0 || height == 0 {
+		width, height = app.window.GetFramebufferSize()
+		glfw.WaitEvents()
+	}
+
+	// Clear the framebuffer resize flag.
+	app.framebufferResize = false
+
 	// Wait for the device to finish work.
 	vk.DeviceWaitIdle(app.device)
 

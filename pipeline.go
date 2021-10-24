@@ -471,6 +471,7 @@ func NewPipeline(app *TriangleApplication, oldPipeline *Pipeline) *Pipeline {
 }
 
 func (pipeline *Pipeline) Cleanup(device vk.Device) {
+	vk.DeviceWaitIdle(device)
 	for _, buffer := range pipeline.SwapchainFramebuffers {
 		vk.DestroyFramebuffer(device, buffer, nil)
 	}
